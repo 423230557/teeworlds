@@ -35,7 +35,7 @@
 	#include <windows.h>
 #endif
 
-static const char *StrLtrim(const char *pStr)
+/*static const char *StrLtrim(const char *pStr)
 {
 	while(*pStr && *pStr >= 0 && *pStr <= 32)
 		pStr++;
@@ -52,7 +52,7 @@ static void StrRtrim(char *pStr)
 		pStr[i] = 0;
 		i--;
 	}
-}
+}*/
 
 
 CSnapIDPool::CSnapIDPool()
@@ -285,75 +285,19 @@ CServer::CServer() : m_DemoRecorder(&m_SnapshotDelta)
 	m_RconClientID = IServer::RCON_CID_SERV;
 	m_RconAuthLevel = AUTHED_ADMIN;
 
+	m_RconPasswordSet = 0;
+	m_GeneratedRconPassword = 0;
+
 	Init();
 }
 
 
-int CServer::TrySetClientName(int ClientID, const char *pName)
-{
-	char aTrimmedName[64];
-
-	// trim the name
-	str_copy(aTrimmedName, StrLtrim(pName), sizeof(aTrimmedName));
-	StrRtrim(aTrimmedName);
-
-	// check for empty names
-	if(!aTrimmedName[0])
-		return -1;
-
-	// check if new and old name are the same
-	if(m_aClients[ClientID].m_aName[0] && str_comp(m_aClients[ClientID].m_aName, aTrimmedName) == 0)
-		return 0;
-
-	char aBuf[256];
-	str_format(aBuf, sizeof(aBuf), "'%s' -> '%s'", pName, aTrimmedName);
-	Console()->Print(IConsole::OUTPUT_LEVEL_ADDINFO, "server", aBuf);
-	pName = aTrimmedName;
-
-	// make sure that two clients doesn't have the same name
-	for(int i = 0; i < MAX_CLIENTS; i++)
-		if(i != ClientID && m_aClients[i].m_State >= CClient::STATE_READY)
-		{
-			if(str_comp(pName, m_aClients[i].m_aName) == 0)
-				return -1;
-		}
-
-	// set the client name
-	str_copy(m_aClients[ClientID].m_aName, pName, MAX_NAME_LENGTH);
-	return 0;
-}
-
-
-
 void CServer::SetClientName(int ClientID, const char *pName)
 {
-	if(ClientID < 0 || ClientID >= MAX_CLIENTS || m_aClients[ClientID].m_State < CClient::STATE_READY)
+	if(ClientID < 0 || ClientID >= MAX_CLIENTS || m_aClients[ClientID].m_State < CClient::STATE_READY || !pName)
 		return;
 
-	if(!pName)
-		return;
-
-	char aCleanName[MAX_NAME_LENGTH];
-	str_copy(aCleanName, pName, sizeof(aCleanName));
-
-	// clear name
-	for(char *p = aCleanName; *p; ++p)
-	{
-		if(*p < 32)
-			*p = ' ';
-	}
-
-	if(TrySetClientName(ClientID, aCleanName))
-	{
-		// auto rename
-		for(int i = 1;; i++)
-		{
-			char aNameTry[MAX_NAME_LENGTH];
-			str_format(aNameTry, sizeof(aCleanName), "(%d)%s", i, aCleanName);
-			if(TrySetClientName(ClientID, aNameTry) == 0)
-				break;
-		}
-	}
+	str_copy(m_aClients[ClientID].m_aName, pName, MAX_NAME_LENGTH);
 }
 
 void CServer::SetClientClan(int ClientID, const char *pClan)
@@ -508,6 +452,36 @@ int CServer::MaxClients() const
 	return m_NetServer.MaxClients();
 }
 
+void CServer::InitRconPasswordIfUnset()
+{
+	if(m_RconPasswordSet)
+	{
+		return;
+	}
+
+	static const char VALUES[] = "ABCDEFGHKLMNPRSTUVWXYZabcdefghjkmnopqt23456789";
+	static const size_t NUM_VALUES = sizeof(VALUES) - 1; // Disregard the '\0'.
+	static const size_t PASSWORD_LENGTH = 6;
+	dbg_assert(NUM_VALUES * NUM_VALUES >= 2048, "need at least 2048 possibilities for 2-character sequences");
+	// With 6 characters, we get a password entropy of log(2048) * 6/2 = 33bit.
+
+	dbg_assert(PASSWORD_LENGTH % 2 == 0, "need an even password length");
+	unsigned short aRandom[PASSWORD_LENGTH / 2];
+	char aRandomPassword[PASSWORD_LENGTH+1];
+	aRandomPassword[PASSWORD_LENGTH] = 0;
+
+	secure_random_fill(aRandom, sizeof(aRandom));
+	for(size_t i = 0; i < PASSWORD_LENGTH / 2; i++)
+	{
+		unsigned short RandomNumber = aRandom[i] % 2048;
+		aRandomPassword[2 * i + 0] = VALUES[RandomNumber / NUM_VALUES];
+		aRandomPassword[2 * i + 1] = VALUES[RandomNumber % NUM_VALUES];
+	}
+
+	str_copy(g_Config.m_SvRconPassword, aRandomPassword, sizeof(g_Config.m_SvRconPassword));
+	m_GeneratedRconPassword = 1;
+}
+
 int CServer::SendMsg(CMsgPacker *pMsg, int Flags, int ClientID)
 {
 	CNetChunk Packet;
@@ -634,10 +608,10 @@ void CServer::DoSnapshot()
 				const int MaxSize = MAX_SNAPSHOT_PACKSIZE;
 				int NumPackets;
 
-				SnapshotSize = CVariableInt::Compress(aDeltaData, DeltaSize, aCompData);
+				SnapshotSize = CVariableInt::Compress(aDeltaData, DeltaSize, aCompData, sizeof(aCompData));
 				NumPackets = (SnapshotSize+MaxSize-1)/MaxSize;
 
-				for(int n = 0, Left = SnapshotSize; Left; n++)
+				for(int n = 0, Left = SnapshotSize; Left > 0; n++)
 				{
 					int Chunk = Left < MaxSize ? Left : MaxSize;
 					Left -= Chunk;
@@ -786,15 +760,16 @@ void CServer::SendRconCmdRem(const IConsole::CCommandInfo *pCommandInfo, int Cli
 
 void CServer::UpdateClientRconCommands()
 {
-	int ClientID = Tick() % MAX_CLIENTS;
-
-	if(m_aClients[ClientID].m_State != CClient::STATE_EMPTY && m_aClients[ClientID].m_Authed)
+	for(int ClientID = Tick() % MAX_RCONCMD_RATIO; ClientID < MaxClients(); ClientID += MAX_RCONCMD_RATIO)
 	{
-		int ConsoleAccessLevel = m_aClients[ClientID].m_Authed == AUTHED_ADMIN ? IConsole::ACCESS_LEVEL_ADMIN : IConsole::ACCESS_LEVEL_MOD;
-		for(int i = 0; i < MAX_RCONCMD_SEND && m_aClients[ClientID].m_pRconCmdToSend; ++i)
+		if(m_aClients[ClientID].m_State != CClient::STATE_EMPTY && m_aClients[ClientID].m_Authed)
 		{
-			SendRconCmdAdd(m_aClients[ClientID].m_pRconCmdToSend, ClientID);
-			m_aClients[ClientID].m_pRconCmdToSend = m_aClients[ClientID].m_pRconCmdToSend->NextCommandInfo(ConsoleAccessLevel, CFGFLAG_SERVER);
+			int ConsoleAccessLevel = m_aClients[ClientID].m_Authed == AUTHED_ADMIN ? IConsole::ACCESS_LEVEL_ADMIN : IConsole::ACCESS_LEVEL_MOD;
+			for(int i = 0; i < MAX_RCONCMD_SEND && m_aClients[ClientID].m_pRconCmdToSend; ++i)
+			{
+				SendRconCmdAdd(m_aClients[ClientID].m_pRconCmdToSend, ClientID);
+				m_aClients[ClientID].m_pRconCmdToSend = m_aClients[ClientID].m_pRconCmdToSend->NextCommandInfo(ConsoleAccessLevel, CFGFLAG_SERVER);
+			}
 		}
 	}
 }
@@ -837,6 +812,8 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 					m_NetServer.Drop(ClientID, "Wrong password");
 					return;
 				}
+
+				m_aClients[ClientID].m_Version = Unpacker.GetInt();
 
 				m_aClients[ClientID].m_State = CClient::STATE_CONNECTING;
 				SendMap(ClientID);
@@ -910,6 +887,7 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 		{
 			CClient::CInput *pInput;
 			int64 TagTime;
+			int64 Now = time_get();
 
 			m_aClients[ClientID].m_LastAckedSnapshot = Unpacker.GetInt();
 			int IntendedTick = Unpacker.GetInt();
@@ -922,14 +900,11 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 			if(m_aClients[ClientID].m_LastAckedSnapshot > 0)
 				m_aClients[ClientID].m_SnapRate = CClient::SNAPRATE_FULL;
 
-			if(m_aClients[ClientID].m_Snapshots.Get(m_aClients[ClientID].m_LastAckedSnapshot, &TagTime, 0, 0) >= 0)
-				m_aClients[ClientID].m_Latency = (int)(((time_get()-TagTime)*1000)/time_freq());
-
 			// add message to report the input timing
 			// skip packets that are old
 			if(IntendedTick > m_aClients[ClientID].m_LastInputTick)
 			{
-				int TimeLeft = ((TickStartTime(IntendedTick)-time_get())*1000) / time_freq();
+				int TimeLeft = ((TickStartTime(IntendedTick)-Now)*1000) / time_freq();
 
 				CMsgPacker Msg(NETMSG_INPUTTIMING, true);
 				Msg.AddInt(IntendedTick);
@@ -948,6 +923,13 @@ void CServer::ProcessClientPacket(CNetChunk *pPacket)
 
 			for(int i = 0; i < Size/4; i++)
 				pInput->m_aData[i] = Unpacker.GetInt();
+
+			int PingCorrection = clamp(Unpacker.GetInt(), 0, 50);
+			if(m_aClients[ClientID].m_Snapshots.Get(m_aClients[ClientID].m_LastAckedSnapshot, &TagTime, 0, 0) >= 0)
+			{
+				m_aClients[ClientID].m_Latency = (int)(((Now-TagTime)*1000)/time_freq());
+				m_aClients[ClientID].m_Latency = max(0, m_aClients[ClientID].m_Latency - PingCorrection);
+			}
 
 			mem_copy(m_aClients[ClientID].m_LatestInput.m_aData, pInput->m_aData, MAX_INPUT_SIZE*sizeof(int));
 
@@ -1105,7 +1087,7 @@ void CServer::GenerateServerInfo(CPacker *pPacker, int Token)
 
 	pPacker->AddInt(g_Config.m_SvSkillLevel);	// server skill level
 	pPacker->AddInt(PlayerCount); // num players
-	pPacker->AddInt(m_NetServer.MaxClients()-g_Config.m_SvSpectatorSlots); // max players
+	pPacker->AddInt(g_Config.m_SvPlayerSlots); // max players
 	pPacker->AddInt(ClientCount); // num clients
 	pPacker->AddInt(m_NetServer.MaxClients()); // max clients
 
@@ -1119,7 +1101,7 @@ void CServer::GenerateServerInfo(CPacker *pPacker, int Token)
 				pPacker->AddString(ClientClan(i), MAX_CLAN_LENGTH); // client clan
 				pPacker->AddInt(m_aClients[i].m_Country); // client country
 				pPacker->AddInt(m_aClients[i].m_Score); // client score
-				pPacker->AddInt(GameServer()->IsClientPlayer(i)?1:0); // is player?
+				pPacker->AddInt(GameServer()->IsClientPlayer(i)?0:1); // flag spectator=1, bot=2 (player=0)
 			}
 		}
 	}
@@ -1154,10 +1136,8 @@ void CServer::PumpNetwork()
 	{
 		if(Packet.m_Flags&NETSENDFLAG_CONNLESS)
 		{
-			// stateless?
-			if(!(Packet.m_Flags&NETSENDFLAG_STATELESS))
-				if(m_Register.RegisterProcessPacket(&Packet, ResponseToken))
-					continue;
+			if(m_Register.RegisterProcessPacket(&Packet, ResponseToken))
+				continue;
 			if(Packet.m_DataSize >= int(sizeof(SERVERBROWSE_GETINFO)) &&
 				mem_comp(Packet.m_pData, SERVERBROWSE_GETINFO, sizeof(SERVERBROWSE_GETINFO)) == 0)
 			{
@@ -1275,7 +1255,7 @@ int CServer::Run()
 		BindAddr.port = g_Config.m_SvPort;
 	}
 
-	if(!m_NetServer.Open(BindAddr, &m_ServerBan, g_Config.m_SvMaxClients, g_Config.m_SvMaxClientsPerIP, NETCREATE_FLAG_ALLOWSTATELESS))
+	if(!m_NetServer.Open(BindAddr, &m_ServerBan, g_Config.m_SvMaxClients, g_Config.m_SvMaxClientsPerIP, 0))
 	{
 		dbg_msg("server", "couldn't open socket. port %d might already be in use", g_Config.m_SvPort);
 		return -1;
@@ -1296,6 +1276,13 @@ int CServer::Run()
 	// process pending commands
 	m_pConsole->StoreCommands(false);
 
+	if(m_GeneratedRconPassword)
+	{
+		dbg_msg("server", "+-------------------------+");
+		dbg_msg("server", "| rcon password: '%s' |", g_Config.m_SvRconPassword);
+		dbg_msg("server", "+-------------------------+");
+	}
+
 	// start game
 	{
 		int64 ReportTime = time_get();
@@ -1303,12 +1290,6 @@ int CServer::Run()
 
 		m_Lastheartbeat = 0;
 		m_GameStartTime = time_get();
-
-		if(g_Config.m_Debug)
-		{
-			str_format(aBuf, sizeof(aBuf), "baseline memory usage %dk", mem_stats()->allocated/1024);
-			Console()->Print(IConsole::OUTPUT_LEVEL_DEBUG, "server", aBuf);
-		}
 
 		while(m_RunServer)
 		{
@@ -1460,8 +1441,8 @@ void CServer::ConStatus(IConsole::IResult *pResult, void *pUser)
 			{
 				const char *pAuthStr = pThis->m_aClients[i].m_Authed == CServer::AUTHED_ADMIN ? "(Admin)" :
 										pThis->m_aClients[i].m_Authed == CServer::AUTHED_MOD ? "(Mod)" : "";
-				str_format(aBuf, sizeof(aBuf), "id=%d addr=%s name='%s' score=%d %s", i, aAddrStr,
-					pThis->m_aClients[i].m_aName, pThis->m_aClients[i].m_Score, pAuthStr);
+				str_format(aBuf, sizeof(aBuf), "id=%d addr=%s client=%x name='%s' score=%d %s", i, aAddrStr,
+					pThis->m_aClients[i].m_Version, pThis->m_aClients[i].m_aName, pThis->m_aClients[i].m_Score, pAuthStr);
 			}
 			else
 				str_format(aBuf, sizeof(aBuf), "id=%d addr=%s connecting", i, aAddrStr);
@@ -1600,6 +1581,15 @@ void CServer::ConchainConsoleOutputLevelUpdate(IConsole::IResult *pResult, void 
 	}
 }
 
+void CServer::ConchainRconPasswordSet(IConsole::IResult *pResult, void *pUserData, IConsole::FCommandCallback pfnCallback, void *pCallbackUserData)
+{
+	pfnCallback(pResult, pCallbackUserData);
+	if(pResult->NumArguments() >= 1)
+	{
+		static_cast<CServer *>(pUserData)->m_RconPasswordSet = 1;
+	}
+}
+
 void CServer::RegisterCommands()
 {
 	m_pConsole = Kernel()->RequestInterface<IConsole>();
@@ -1624,6 +1614,7 @@ void CServer::RegisterCommands()
 	Console()->Chain("sv_max_clients_per_ip", ConchainMaxclientsperipUpdate, this);
 	Console()->Chain("mod_command", ConchainModCommandUpdate, this);
 	Console()->Chain("console_output_level", ConchainConsoleOutputLevelUpdate, this);
+	Console()->Chain("sv_rcon_password", ConchainRconPasswordSet, this);
 
 	// register console commands in sub parts
 	m_ServerBan.InitServerBan(Console(), Storage(), this);
@@ -1677,6 +1668,13 @@ int main(int argc, const char **argv) // ignore_convention
 			UseDefaultConfig = true;
 			break;
 		}
+	}
+
+	bool SkipPWGen = false;
+	if(secure_random_init() != 0)
+	{
+		dbg_msg("secure", "could not initialize secure RNG");
+		SkipPWGen = true;	// skip automatic password generation
 	}
 
 	CServer *pServer = CreateServer();
@@ -1734,6 +1732,9 @@ int main(int argc, const char **argv) // ignore_convention
 	pConfig->RestoreStrings();
 
 	pEngine->InitLogfile();
+
+	if(!SkipPWGen)
+		pServer->InitRconPasswordIfUnset();
 
 	// run the server
 	dbg_msg("server", "starting...");

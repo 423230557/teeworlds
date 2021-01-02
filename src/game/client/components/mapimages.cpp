@@ -21,10 +21,7 @@ void CMapImages::LoadMapImages(IMap *pMap, class CLayers *pLayers, int MapType)
 
 	// unload all textures
 	for(int i = 0; i < m_Info[MapType].m_Count; i++)
-	{
-		Graphics()->UnloadTexture(m_Info[MapType].m_aTextures[i]);
-		m_Info[MapType].m_aTextures[i] = IGraphics::CTextureHandle();
-	}
+		Graphics()->UnloadTexture(&(m_Info[MapType].m_aTextures[i]));
 	m_Info[MapType].m_Count = 0;
 
 	int Start;
@@ -40,9 +37,9 @@ void CMapImages::LoadMapImages(IMap *pMap, class CLayers *pLayers, int MapType)
 		for(int k = 0; k < pLayers->NumLayers(); k++)
 		{
 			const CMapItemLayer * const pLayer = pLayers->GetLayer(k);
-			if(!FoundQuadLayer && pLayer->m_Type == LAYERTYPE_QUADS && ((const CMapItemLayerQuads * const)pLayer)->m_Image == i)
+			if(!FoundQuadLayer && pLayer->m_Type == LAYERTYPE_QUADS && ((const CMapItemLayerQuads *)pLayer)->m_Image == i)
 				FoundQuadLayer = true;
-			if(!FoundTileLayer && pLayer->m_Type == LAYERTYPE_TILES && ((const CMapItemLayerTilemap * const)pLayer)->m_Image == i)
+			if(!FoundTileLayer && pLayer->m_Type == LAYERTYPE_TILES && ((const CMapItemLayerTilemap *)pLayer)->m_Image == i)
 				FoundTileLayer = true;
 		}
 		if(FoundTileLayer)

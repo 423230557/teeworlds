@@ -57,6 +57,7 @@ CGameConsole::CInstance::CInstance(int Type)
 void CGameConsole::CInstance::Init(CGameConsole *pGameConsole)
 {
 	m_pGameConsole = pGameConsole;
+	m_Input.Init(m_pGameConsole->Input());
 };
 
 void CGameConsole::CInstance::ClearBacklog()
@@ -671,6 +672,11 @@ void CGameConsole::ConchainConsoleOutputLevelUpdate(IConsole::IResult *pResult, 
 		CGameConsole *pThis = static_cast<CGameConsole *>(pUserData);
 		pThis->Console()->SetPrintOutputLevel(pThis->m_PrintCBIndex, pResult->GetInteger(0));
 	}
+}
+
+bool CGameConsole::IsConsoleActive()
+{
+	return m_ConsoleState != CONSOLE_CLOSED;
 }
 
 void CGameConsole::PrintLine(int Type, const char *pLine)

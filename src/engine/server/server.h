@@ -76,6 +76,7 @@ public:
 		AUTHED_ADMIN,
 
 		MAX_RCONCMD_SEND=16,
+		MAX_RCONCMD_RATIO=8,
 	};
 
 	class CClient
@@ -117,6 +118,7 @@ public:
 
 		char m_aName[MAX_NAME_LENGTH];
 		char m_aClan[MAX_CLAN_LENGTH];
+		int m_Version;
 		int m_Country;
 		int m_Score;
 		int m_Authed;
@@ -161,13 +163,14 @@ public:
 	int m_CurrentMapSize;
 	int m_MapChunksPerRequest;
 
+	int m_RconPasswordSet;
+	int m_GeneratedRconPassword;
+
 	CDemoRecorder m_DemoRecorder;
 	CRegister m_Register;
 	CMapChecker m_MapChecker;
 
 	CServer();
-
-	int TrySetClientName(int ClientID, const char *pName);
 
 	virtual void SetClientName(int ClientID, const char *pName);
 	virtual void SetClientClan(int ClientID, char const *pClan);
@@ -182,6 +185,8 @@ public:
 	int64 TickStartTime(int Tick);
 
 	int Init();
+
+	void InitRconPasswordIfUnset();
 
 	void SetRconCID(int ClientID);
 	bool IsAuthed(int ClientID) const;
@@ -235,6 +240,7 @@ public:
 	static void ConchainMaxclientsperipUpdate(IConsole::IResult *pResult, void *pUserData, IConsole::FCommandCallback pfnCallback, void *pCallbackUserData);
 	static void ConchainModCommandUpdate(IConsole::IResult *pResult, void *pUserData, IConsole::FCommandCallback pfnCallback, void *pCallbackUserData);
 	static void ConchainConsoleOutputLevelUpdate(IConsole::IResult *pResult, void *pUserData, IConsole::FCommandCallback pfnCallback, void *pCallbackUserData);
+	static void ConchainRconPasswordSet(IConsole::IResult *pResult, void *pUserData, IConsole::FCommandCallback pfnCallback, void *pCallbackUserData);
 
 	void RegisterCommands();
 

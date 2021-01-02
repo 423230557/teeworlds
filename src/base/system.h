@@ -170,14 +170,6 @@ void mem_zero(void *block, unsigned size);
 */
 int mem_comp(const void *a, const void *b, int size);
 
-/*
-	Function: mem_check
-		Validates the heap
-		Will trigger a assert if memory has failed.
-*/
-int mem_check_imp();
-#define mem_check() dbg_assert_imp(__FILE__, __LINE__, mem_check_imp(), "Memory check failed")
-
 /* Group: File IO */
 enum {
 	IOFLAG_READ = 1,
@@ -219,6 +211,21 @@ IOHANDLE io_open(const char *filename, int flags);
 
 */
 unsigned io_read(IOHANDLE io, void *buffer, unsigned size);
+
+/*
+	Function: io_unread_byte
+		"Unreads" a single byte, making it available for future read
+		operations.
+
+	Parameters:
+		io - Handle to the file to unread the byte from.
+		byte - Byte to unread.
+
+	Returns:
+		Returns 0 on success and 1 on failure.
+
+*/
+unsigned io_unread_byte(IOHANDLE io, unsigned char byte);
 
 /*
 	Function: io_skip
@@ -398,6 +405,12 @@ void thread_yield();
 */
 void thread_detach(void *thread);
 
+/*
+	Function: cpu_relax
+		Lets the cpu relax a bit.
+*/
+void cpu_relax();
+
 /* Group: Locks */
 typedef void* LOCK;
 
@@ -474,6 +487,16 @@ int time_timestamp();
 		The current hour of the day
 */
 int time_houroftheday();
+
+/*
+	Function: time_isxmasday
+		Checks if it's xmas
+
+	Returns:
+		1 - if it's a xmas day
+		0 - if not
+*/
+int time_isxmasday();
 
 /* Group: Network General */
 typedef struct
@@ -748,7 +771,7 @@ void str_append(char *dst, const char *src, int dst_size);
 		Copies a string to another.
 
 	Parameters:
-		dst - Pointer to a buffer that shall recive the string.
+		dst - Pointer to a buffer that shall receive the string.
 		src - String to be copied.
 		dst_size - Size of the buffer dst.
 
@@ -757,6 +780,23 @@ void str_append(char *dst, const char *src, int dst_size);
 		- Garantees that dst string will contain zero-termination.
 */
 void str_copy(char *dst, const char *src, int dst_size);
+
+/*
+	Function: str_truncate
+		Truncates a string to a given length.
+
+	Parameters:
+		dst - Pointer to a buffer that shall receive the string.
+		dst_size - Size of the buffer dst.
+		src - String to be truncated.
+		truncation_len - Maximum length of the returned string (not
+		counting the zero termination).
+
+	Remarks:
+		- The strings are treated as zero-terminated strings.
+		- Garantees that dst string will contain zero-termination.
+*/
+void str_truncate(char *dst, int dst_size, const char *src, int truncation_len);
 
 /*
 	Function: str_length
@@ -823,6 +863,19 @@ void str_sanitize_cc(char *str);
 		- The strings are treated as zero-terminated strings.
 */
 void str_sanitize(char *str);
+
+/*
+	Function: str_sanitize_filename
+		Replaces all forbidden Windows/Unix characters with whitespace
+		or nothing if leading or trailing.
+
+	Parameters:
+		str - String to sanitize.
+
+	Remarks:
+		- The strings are treated as zero-terminated strings.
+*/
+char* str_sanitize_filename(char* aName);
 
 /*
 	Function: str_check_pathname
@@ -976,6 +1029,40 @@ int str_comp_num(const char *a, const char *b, const int num);
 		- The strings are treated as zero-terminated strings.
 */
 int str_comp_filenames(const char *a, const char *b);
+
+/*
+	Function: str_startswith
+		Checks whether the string begins with a certain prefix.
+
+	Parameter:
+		str - String to check.
+		prefix - Prefix to look for.
+
+	Returns:
+		A pointer to the string str after the string prefix, or 0 if
+		the string prefix isn't a prefix of the string str.
+
+	Remarks:
+		- The strings are treated as zero-terminated strings.
+*/
+const char *str_startswith(const char *str, const char *prefix);
+
+/*
+	Function: str_endswith
+		Checks whether the string ends with a certain suffix.
+
+	Parameter:
+		str - String to check.
+		suffix - Suffix to look for.
+
+	Returns:
+		A pointer to the beginning of the suffix in the string str, or
+		0 if the string suffix isn't a suffix of the string str.
+
+	Remarks:
+		- The strings are treated as zero-terminated strings.
+*/
+const char *str_endswith(const char *str, const char *suffix);
 
 /*
 	Function: str_find_nocase
@@ -1203,8 +1290,6 @@ int net_would_block();
 
 int net_socket_read_wait(NETSOCKET sock, int time);
 
-void mem_debug_dump(IOHANDLE file);
-
 void swap_endian(void *data, unsigned elem_size, unsigned num);
 
 
@@ -1215,14 +1300,10 @@ void dbg_logger_stdout();
 void dbg_logger_debugger();
 void dbg_logger_file(const char *filename);
 
-typedef struct
-{
-	int allocated;
-	int active_allocations;
-	int total_allocations;
-} MEMSTATS;
-
-const MEMSTATS *mem_stats();
+#if defined(CONF_FAMILY_WINDOWS)
+void dbg_console_init();
+void dbg_console_cleanup();
+#endif
 
 typedef struct
 {
@@ -1320,6 +1401,27 @@ int str_utf8_encode(char *ptr, int chr);
 		- The string is treated as zero-terminated utf8 string.
 */
 int str_utf8_check(const char *str);
+
+/*
+	Function: secure_random_init
+		Initializes the secure random module.
+		You *MUST* check the return value of this function.
+
+	Returns:
+		0 - Initialization succeeded.
+		1 - Initialization failed.
+*/
+int secure_random_init();
+
+/*
+	Function: secure_random_fill
+		Fills the buffer with the specified amount of random bytes.
+
+	Parameters:
+		bytes - Pointer to the start of the buffer.
+		length - Length of the buffer.
+*/
+void secure_random_fill(void *bytes, unsigned length);
 
 #ifdef __cplusplus
 }
